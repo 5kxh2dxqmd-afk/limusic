@@ -2,6 +2,12 @@ name: Sync upstream and publish release
 
 on:
   workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel to sync now
+        type: choice
+        options: [all, stable, beta]
+        default: all
   schedule:
     - cron: "17 6 * * *"
 
@@ -26,6 +32,7 @@ jobs:
       - name: Sync upstream master and release tag
         env:
           GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+          CHANNEL: ${{ inputs.channel || 'all' }}
         run: |
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
@@ -81,12 +88,16 @@ jobs:
           }
 
           # Stable and beta channels advance independently. GitHub returns releases newest first.
-          STABLE_TAG="$(gh api repos/SimoHypers/limusic/releases/latest --jq .tag_name)"
-          BETA_TAG="$(gh api "repos/SimoHypers/limusic/releases?per_page=100" \
-            --jq '[.[] | select(.prerelease == true and .draft == false)][0].tag_name // empty')"
-          publish_release "$STABLE_TAG" false
-          if [ -n "$BETA_TAG" ]; then
-            publish_release "$BETA_TAG" true
-          else
-            echo "No published upstream prerelease to mirror"
+          if [ "$CHANNEL" = all ] || [ "$CHANNEL" = stable ]; then
+            STABLE_TAG="$(gh api repos/SimoHypers/limusic/releases/latest --jq .tag_name)"
+            publish_release "$STABLE_TAG" false
+          fi
+          if [ "$CHANNEL" = all ] || [ "$CHANNEL" = beta ]; then
+            BETA_TAG="$(gh api "repos/SimoHypers/limusic/releases?per_page=100" \
+              --jq '[.[] | select(.prerelease == true and .draft == false)][0].tag_name // empty')"
+            if [ -n "$BETA_TAG" ]; then
+              publish_release "$BETA_TAG" true
+            else
+              echo "No published upstream prerelease to mirror"
+            fi
           fi
