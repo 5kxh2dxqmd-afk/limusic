@@ -3,7 +3,7 @@ name: macOS release binaries
 # Builds the macOS app for a release that ALREADY EXISTS and attaches a public DMG for each Mac
 # architecture. The app updater continues to use the upstream signed feed; these are direct downloads.
 #
-# Same shape as windows-release.yml: scripts/release.sh publishes the release and dispatches this.
+# The upstream sync workflow creates each release and dispatches this build from master.
 # Nobody owns a Mac here, so every check this job can make, it makes.
 #
 # WHY THIS IS MORE THAN `tauri build`. Homebrew's libmpv.2.dylib links against ~40 other Homebrew
@@ -11,9 +11,8 @@ name: macOS release binaries
 # libmpv into the bundle produces an app that starts on a machine with `brew install mpv` and
 # nowhere else. So the job runs dylibbundler over the built .app, which walks the whole dependency
 # graph, copies it into Contents/Frameworks and rewrites every install name to @executable_path.
-# That is the macOS counterpart of scripts/fix-appdir-tls.sh, and it has the same consequence:
-# rewriting a Mach-O invalidates its signature, arm64 macOS refuses to execute unsigned code, so the
-# bundle is re-signed (ad-hoc) before it is archived, and the updater .sig is generated afterwards.
+# That is the macOS counterpart of scripts/fix-appdir-tls.sh. Rewriting a Mach-O invalidates its
+# signature, so the app bundle is re-signed ad-hoc before it goes into the public DMG.
 #
 # macos-15 and macos-15-intel are the oldest supported runners for their respective architectures.
 # Homebrew bottles are built per macOS version, so the runner's OS is the app's floor exactly like
@@ -207,12 +206,10 @@ jobs:
             echo "::warning::LASTFM_API_KEY / LASTFM_API_SECRET secrets not set, this macOS build ships without Last.fm scrobbling"
           fi
 
-      # Only the .app. The .dmg and the updater tarball are built further down, from the *fixed and
-      # re-signed* bundle: anything tauri packaged here would contain the pre-dylibbundler app.
+      # Only the .app. The DMG is built further down from the fixed and re-signed bundle.
       #
-      # createUpdaterArtifacts is turned off for the same reason. Left on, the bundler tars the
-      # unfixed .app and then fails the build asking for the signing key, which is deliberately not
-      # in scope here: the tarball that ships is made and signed further down, after dylibbundler.
+      # createUpdaterArtifacts is turned off because direct-download packages do not include
+      # updater signatures. In-app updates continue to use the upstream signed feed.
       - name: Build the app bundle
         run: |
           set -euo pipefail
@@ -368,7 +365,7 @@ jobs:
           DMG="target/release/bundle/dmg/limusic_${VERSION}_${ARCH}.dmg"
           STAGE="$(mktemp -d)/Limusic"
           mkdir -p "$STAGE" "$(dirname "$DMG")"
-          # ditto, not cp: it is the copy that preserves a bundle's metadata and signature intact.
+          # ditto, not cp: it preserves a bundle's metadata and ad-hoc code signature intact.
           ditto "$APP" "$STAGE/limusic.app"
           ln -s /Applications "$STAGE/Applications"
           hdiutil create -volname "Limusic" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
