@@ -42,30 +42,51 @@ jobs:
           git merge -X ours --no-edit upstream/master
           git push origin master
 
-          # Mirror the source tag and publish the release in this public repository.
-          TAG="$(gh api repos/SimoHypers/limusic/releases/latest --jq .tag_name)"
-          git push origin "refs/tags/$TAG:refs/tags/$TAG"
-          NOTES_FILE="$(mktemp)"
-          gh api "repos/SimoHypers/limusic/releases/tags/$TAG" --jq .body > "$NOTES_FILE"
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --title "$TAG" --notes-file "$NOTES_FILE" --latest
-          fi
-
-          # Dispatch with the PAT: workflow_dispatch events from GITHUB_TOKEN are suppressed.
-          # If any public installer is missing, rebuild the release assets and replace existing files.
-          ASSETS="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name] | join("\n")')"
-          VERSION="${TAG#v}"
-          MISSING=0
-          for suffix in .AppImage .deb .exe .msi "_${VERSION}_aarch64.dmg" "_${VERSION}_x86_64.dmg"; do
-            if ! printf '%s\n' "$ASSETS" | grep -F "$suffix" >/dev/null; then
-              MISSING=1
+          publish_release() {
+            local tag="$1" prerelease="$2" notes assets version missing suffix
+            git push origin "refs/tags/$tag:refs/tags/$tag"
+            notes="$(mktemp)"
+            gh api "repos/SimoHypers/limusic/releases/tags/$tag" --jq .body > "$notes"
+            if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              if [ "$prerelease" = true ]; then
+                gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" \
+                  --notes-file "$notes" --prerelease --latest=false
+              else
+                gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" \
+                  --notes-file "$notes" --latest
+              fi
             fi
-          done
-          if [ "$MISSING" = 1 ]; then
-            gh workflow run "Linux release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$TAG"
-            gh workflow run "Windows release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$TAG"
-            gh workflow run "macOS release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$TAG"
+
+            # Dispatch with the PAT: workflow_dispatch events from GITHUB_TOKEN are suppressed.
+            # Retry all platform jobs whenever one of this release channel's assets is missing.
+            assets="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name] | join("\n")')"
+            version="${tag#v}"
+            missing=0
+            if [ "$prerelease" = true ]; then
+              for suffix in .AppImage .exe "_${version}_aarch64.dmg" "_${version}_x86_64.dmg"; do
+                if ! printf '%s\n' "$assets" | grep -F "$suffix" >/dev/null; then missing=1; fi
+              done
+            else
+              for suffix in .AppImage .deb .exe .msi "_${version}_aarch64.dmg" "_${version}_x86_64.dmg"; do
+                if ! printf '%s\n' "$assets" | grep -F "$suffix" >/dev/null; then missing=1; fi
+              done
+            fi
+            if [ "$missing" = 1 ]; then
+              gh workflow run "Linux release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$tag"
+              gh workflow run "Windows release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$tag"
+              gh workflow run "macOS release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$tag"
+            else
+              echo "All public installers already exist for $tag"
+            fi
+          }
+
+          # Stable and beta channels advance independently. GitHub returns releases newest first.
+          STABLE_TAG="$(gh api repos/SimoHypers/limusic/releases/latest --jq .tag_name)"
+          BETA_TAG="$(gh api "repos/SimoHypers/limusic/releases?per_page=100" \
+            --jq '[.[] | select(.prerelease == true and .draft == false)][0].tag_name // empty')"
+          publish_release "$STABLE_TAG" false
+          if [ -n "$BETA_TAG" ]; then
+            publish_release "$BETA_TAG" true
           else
-            echo "All public installers already exist for $TAG"
+            echo "No published upstream prerelease to mirror"
           fi
