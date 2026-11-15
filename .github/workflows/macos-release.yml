@@ -14,9 +14,9 @@ name: macOS release binaries
 # That is the macOS counterpart of scripts/fix-appdir-tls.sh. Rewriting a Mach-O invalidates its
 # signature, so the app bundle is re-signed ad-hoc before it goes into the public DMG.
 #
-# macos-15 and macos-15-intel are the oldest supported runners for their respective architectures.
-# Homebrew bottles are built per macOS version, so the runner's OS is the app's floor exactly like
-# glibc is on Linux. Both builds target macOS 15+, as declared in tauri.macos.conf.json.
+# GitHub retired its macOS 14 runners, so these builds run on macOS 15 and explicitly target 14.
+# Homebrew bottles are not all compatible with that lower target; rebuild every bundled formula
+# whose bottle requires macOS 15 from source, then reject any bundle member that still requires 15.
 #
 # NOT SIGNED WITH AN APPLE CERT, so the app is quarantined on first launch and Gatekeeper says the
 # app "is damaged". Users clear it with `xattr -dr com.apple.quarantine /Applications/limusic.app`.
@@ -64,15 +64,14 @@ concurrency:
 
 jobs:
   build:
-    # PINNED. macos-latest tracks the newest macOS, and since every bundled Homebrew dylib is built
-    # for the runner's OS, that would silently raise the floor for users.
+    # PINNED so Homebrew and the SDK do not silently change underneath the deployment target.
     strategy:
       fail-fast: false
       matrix:
         arch: ${{ fromJSON(inputs.arch == 'all' && '["aarch64","x86_64"]' || format('["{0}"]', inputs.arch)) }}
     runs-on: ${{ matrix.arch == 'aarch64' && 'macos-15' || 'macos-15-intel' }}
-    # A healthy run is ~15 min, ~25 on a cold cargo cache (brew install mpv alone is a few minutes).
-    timeout-minutes: 45
+    # Source-building Homebrew dependencies for the lower deployment target takes longer than a bottle install.
+    timeout-minutes: 120
     steps:
       - name: Resolve the tag
         id: rel
@@ -81,6 +80,9 @@ jobs:
           [ -n "$TAG" ] || { echo "::error::no tag to build for"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "ARCH=${{ matrix.arch }}" >> "$GITHUB_ENV"
+          # Set before rust-cache so Rust artifacts built for macOS 15 cannot be restored here.
+          echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
+          echo 'RUSTFLAGS=-C link-arg=-mmacosx-version-min=14.0' >> "$GITHUB_ENV"
 
       # Actions pinned to commit SHAs, not tags: `@v4` is mutable and `rust-toolchain@stable` is a
       # branch. This job publishes public installers, so
@@ -144,6 +146,12 @@ jobs:
         run: |
           set -euo pipefail
           brew install mpv dylibbundler
+          # These bundled Homebrew bottles can require macOS 15. Rebuild from source for Sonoma.
+          for formula in openssl@3 lz4 xz pcre2 vulkan-loader zstd; do
+            if brew list --formula "$formula" >/dev/null 2>&1; then
+              brew reinstall --build-from-source "$formula"
+            fi
+          done
           PREFIX="$(brew --prefix)"
           # The formula could stop shipping libmpv (it is a build option, not the formula's point).
           # Fail here with a sentence, rather than 200 lines of linker error further down.
@@ -152,10 +160,9 @@ jobs:
             ls "$PREFIX/lib" | grep -i mpv || true
             exit 1
           fi
-          # LIBRARY_PATH, not RUSTFLAGS: libmpv2-sys emits `cargo:rustc-link-lib=mpv` and the
-          # linker driver honours LIBRARY_PATH, so the link resolves without touching cargo's
-          # fingerprint or Swatinem/rust-cache's key. (See the long warning in windows-release.yml
-          # about what happens when RUSTFLAGS and the cache key disagree.)
+          # LIBRARY_PATH resolves libmpv2-sys's `cargo:rustc-link-lib=mpv` without adding a linker
+          # flag. RUSTFLAGS was set before rust-cache for the macOS 14 deployment target, so those
+          # artifacts are isolated from the former macOS 15 cache.
           echo "LIBRARY_PATH=$PREFIX/lib" >> "$GITHUB_ENV"
           echo "BREW_PREFIX=$PREFIX" >> "$GITHUB_ENV"
           echo "libmpv: $(cd "$PREFIX/lib" && ls -l libmpv*.dylib | head -3)"
@@ -179,6 +186,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: . -> target
+          shared-key: macos-14-deployment
           # Nobody here owns a Mac, so this job is the only place a macOS problem can be reproduced,
           # and every fix costs a full run. Without this, a run that fails anywhere after the
           # compile throws away six minutes of build and the next attempt starts cold again.
@@ -222,7 +230,7 @@ jobs:
           # the repo root, which has no package.json, so which frontend package pnpm picks is down
           # to the filesystem.
           tauri build --bundles app --config \
-            '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}'
+            '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false,"macOS":{"minimumSystemVersion":"14.0"}}}'
           [ -d "target/release/bundle/macos/limusic.app" ] \
             || { echo "::error::no .app at target/release/bundle/macos/limusic.app"; find target/release/bundle -maxdepth 2; exit 1; }
 
@@ -358,6 +366,33 @@ jobs:
             exit 1
           fi
           echo "every linked library is either bundled or a macOS system library"
+
+      - name: Check every bundle binary supports macOS 14
+        run: |
+          set -euo pipefail
+          APP=target/release/bundle/macos/limusic.app
+          TOO_NEW="$(find "$APP" -type f -print0 | while IFS= read -r -d '' f; do
+            otool -l "$f" 2>/dev/null | awk -v file="${f#$APP/}" '
+              /cmd LC_BUILD_VERSION/ { build=1; next }
+              /cmd LC_VERSION_MIN_MACOSX/ { legacy=1; next }
+              build && $1 == "minos" {
+                split($2, v, ".")
+                if (v[1] + 0 > 14 || (v[1] + 0 == 14 && v[2] + 0 > 0)) print file " requires " $2
+                build=0
+              }
+              legacy && $1 == "version" {
+                split($2, v, ".")
+                if (v[1] + 0 > 14 || (v[1] + 0 == 14 && v[2] + 0 > 0)) print file " requires " $2
+                legacy=0
+              }
+            '
+          done)"
+          if [ -n "$TOO_NEW" ]; then
+            echo "::error::these bundled binaries require macOS newer than 14.0:"
+            echo "$TOO_NEW"
+            exit 1
+          fi
+          echo "every Mach-O in the app bundle supports macOS 14.0"
 
       # hdiutil rather than tauri's dmg bundler: that one drives AppleScript to lay the window out
       # and hangs on headless runners, and this needs to run unattended. The /Applications symlink is
