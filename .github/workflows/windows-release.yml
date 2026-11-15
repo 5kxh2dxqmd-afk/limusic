@@ -365,6 +365,7 @@ jobs:
 
       - name: Publish Windows installers
         if: ${{ !inputs.dry_run }}
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
