@@ -48,7 +48,7 @@ on:
 permissions:
   contents: write # upload assets onto the release
 
-# Per-workflow, serialized per tag so the architecture legs do not upload together.
+# Prevent duplicate workflow runs for the same tag from replacing each other's release assets.
 concurrency:
   group: macos-release-${{ inputs.tag }}
   cancel-in-progress: false
@@ -59,7 +59,6 @@ jobs:
     # for the runner's OS, that would silently raise the floor for users.
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
         include:
           - runner: macos-15
