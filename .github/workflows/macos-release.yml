@@ -1,8 +1,7 @@
 name: macOS release binaries
 
-# Builds, bundles and signs the macOS app for a release that ALREADY EXISTS, attaches the .dmg and
-# the updater tarball, and adds entries for both `darwin-aarch64` and `darwin-x86_64` to latest.json
-# so Intel and Apple Silicon Macs auto-update too.
+# Builds the macOS app for a release that ALREADY EXISTS and attaches a public DMG for each Mac
+# architecture. The app updater continues to use the upstream signed feed; these are direct downloads.
 #
 # Same shape as windows-release.yml: scripts/release.sh publishes the release and dispatches this.
 # Nobody owns a Mac here, so every check this job can make, it makes.
@@ -28,7 +27,6 @@ name: macOS release binaries
 #   Actions ▸ macOS release binaries ▸ Run workflow ▸ tag = v0.4.5
 #
 # Requires repo secrets (same set as the other two):
-#   TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD   (mandatory, no sig no update)
 #   LASTFM_API_KEY / LASTFM_API_SECRET                               (optional, warn-only)
 
 # DISPATCH ONLY, ON PURPOSE, for the reason spelled out in the other two workflows: Actions caches
@@ -43,7 +41,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: Build, bundle, sign and verify, but attach nothing to the release
+        description: Build and verify, but attach nothing to the release
         required: false
         default: false
         type: boolean
@@ -51,8 +49,7 @@ on:
 permissions:
   contents: write # upload assets onto the release
 
-# Per-workflow. All three release jobs run in parallel and contend only for latest.json, which the
-# upload step merges with a read-back retry.
+# Per-workflow, serialized per tag so the architecture legs do not upload together.
 concurrency:
   group: macos-release-${{ inputs.tag }}
   cancel-in-progress: false
@@ -63,16 +60,13 @@ jobs:
     # for the runner's OS, that would silently raise the floor for users.
     strategy:
       fail-fast: false
-      # The two legs both merge their platform into the same latest.json asset.
       max-parallel: 1
       matrix:
         include:
           - runner: macos-15
             arch: aarch64
-            updater_target: darwin-aarch64
           - runner: macos-15-intel
             arch: x86_64
-            updater_target: darwin-x86_64
     runs-on: ${{ matrix.runner }}
     # A healthy run is ~15 min, ~25 on a cold cargo cache (brew install mpv alone is a few minutes).
     timeout-minutes: 45
@@ -84,18 +78,16 @@ jobs:
           [ -n "$TAG" ] || { echo "::error::no tag to build for"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "ARCH=${{ matrix.arch }}" >> "$GITHUB_ENV"
-          echo "UPDATER_TARGET=${{ matrix.updater_target }}" >> "$GITHUB_ENV"
 
       # Actions pinned to commit SHAs, not tags: `@v4` is mutable and `rust-toolchain@stable` is a
-      # branch. This job holds TAURI_SIGNING_PRIVATE_KEY and builds what users auto-update to, so
+      # branch. This job publishes public installers, so
       # nothing in it should be able to change under us.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.rel.outputs.tag }}
           persist-credentials: false
 
-      # The tag is the contract: the binaries must come from the source that tag points at, and the
-      # updater compares tauri.conf.json's version against it.
+      # The tag is the contract: the binary must come from the source tag.
       #
       # A dry run is allowed to disagree, because that is the only way to test this workflow against
       # a branch (`tag: master`) instead of a published tag. Nothing is uploaded on a dry run, so a
@@ -366,43 +358,6 @@ jobs:
           fi
           echo "every linked library is either bundled or a macOS system library"
 
-      # The updater artifact. Tauri would have produced this itself, but from the unfixed bundle, so
-      # it is built and signed here instead, after the repack, exactly like the AppImage.
-      # COPYFILE_DISABLE stops bsdtar writing AppleDouble `._` companions into the archive, which
-      # would be extracted next to the .app on every user's machine.
-      - name: Archive + sign the updater bundle
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set, the build would produce an unsignable update"
-            exit 1
-          fi
-          TAR="target/release/bundle/macos/limusic_${VERSION}_${ARCH}.app.tar.gz"
-          # cd into the bundle dir rather than `tar -C`, so there is no question about whether the
-          # archive path is resolved before or after the chdir. The archive must contain the .app
-          # at its root: that is what the updater extracts over the installed one.
-          (cd target/release/bundle/macos \
-            && COPYFILE_DISABLE=1 tar -czf "limusic_${VERSION}_${ARCH}.app.tar.gz" limusic.app)
-          tauri signer sign "$TAR"
-          [ -f "$TAR.sig" ] || { echo "::error::tauri signer produced no .sig for $TAR"; exit 1; }
-          echo "TAR=$TAR" >> "$GITHUB_ENV"
-          echo "updater archive: $(du -h "$TAR" | cut -f1)"
-
-      # Round-trip check: unpack what the updater will actually install and verify the signature
-      # survived the tar. A bundle that verifies in place but not after extraction is an update that
-      # bricks the app, and there is no way to notice that from here otherwise.
-      - name: Verify the archived app still passes codesign
-        run: |
-          set -euo pipefail
-          rm -rf /tmp/roundtrip && mkdir -p /tmp/roundtrip
-          tar -xzf "$TAR" -C /tmp/roundtrip
-          codesign --verify --deep --strict --verbose=2 /tmp/roundtrip/limusic.app
-          test -x "/tmp/roundtrip/limusic.app/Contents/MacOS/$EXECUTABLE"
-          echo "the extracted bundle verifies and its binary is executable"
-
       # hdiutil rather than tauri's dmg bundler: that one drives AppleScript to lay the window out
       # and hangs on headless runners, and this needs to run unattended. The /Applications symlink is
       # what makes the window a drag-to-install.
@@ -434,205 +389,18 @@ jobs:
           name: limusic-macos-dry-run-${{ steps.rel.outputs.tag }}
           path: |
             target/release/bundle/dmg/*.dmg
-            target/release/bundle/macos/*.app.tar.gz
-            target/release/bundle/macos/*.app.tar.gz.sig
           if-no-files-found: error
           retention-days: 7
 
-      - name: Attach the DMG + teach latest.json about macOS
+      - name: Publish the DMG to the public releases repository
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASES_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           TAG="${{ steps.rel.outputs.tag }}"
-
-          # Every GitHub API call goes through this. Without it one transient failure aborts the job
-          # with the DMG uploaded and latest.json un-merged, so Mac installs are never offered the
-          # update and nothing says so. All calls are idempotent, so retrying is safe.
-          retry() { # retry <attempts> <command…>
-            local n="$1"; shift
-            local i
-            for ((i = 1; i <= n; i++)); do
-              "$@" && return 0
-              # stderr, not stdout: `x="$(retry 3 gh api …)"` would otherwise capture this line.
-              echo "::warning::attempt $i/$n failed: $*" >&2
-              sleep $((i * 10))
-            done
-            return 1
-          }
-          fetch_manifest() { # fetch_manifest <dir>
-            rm -rf "$1" && gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir "$1"
-          }
-          # `gh release upload` has neither a timeout nor stall detection. When GitHub's asset
-          # origin (uploads.github.com) degrades, gh sits there with no output and no bytes moving,
-          # so the job hangs instead of failing and `retry` never gets its turn: v0.7.3 lost two
-          # Linux runs that way on an AppImage that had gone up in 18 seconds the day before, and
-          # the release sat half-published. It is not a size threshold. A probe that afternoon
-          # wedged on a 10 MiB blob while a 420 byte .sig went straight through.
-          #
-          # curl can tell a stalled upload from a slow one, which is the whole point: --speed-limit
-          # with --speed-time gives up once throughput has been under 32 KB/s for a minute, while an
-          # upload that is merely slow (the Linux one that eventually landed averaged 610 KB/s) runs
-          # to completion however long it takes. --max-time is the outer bound, for bytes that
-          # trickle just above the stall limit forever.
-          #
-          # Files go up one at a time, the signed artifact before its .sig, so a failure part-way
-          # cannot leave a .sig on the release beside a missing binary.
-          upload() { # upload <file…>
-            local f name id code state
-            for f in "$@"; do
-              # The API rewrites an asset name it does not like (a space becomes a dot) and stores
-              # it under the rewritten one, so sending the basename verbatim would leave the lookup
-              # below searching for a name that is not there and the re-upload answering 422.
-              # Sanitising first means what we send is what gets stored, and it is already URL-safe.
-              name="$(basename "$f")"; name="${name//[!A-Za-z0-9._-]/.}"
-              # What --clobber used to do. A killed upload also leaves the asset in the "starter"
-              # state, where it is listed with the right size, 404s on download, and blocks the name.
-              id="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate \
-                    --jq ".[] | select(.name == \"$name\") | .id" | head -1)"
-              if [ -n "$id" ]; then
-                gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$id" --silent || return 1
-              fi
-              code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-                --request POST --upload-file "$f" \
-                --speed-limit 32768 --speed-time 60 --max-time 900 \
-                --header "Authorization: Bearer $GH_TOKEN" \
-                --header "Content-Type: application/octet-stream" \
-                "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$name")" \
-                || { echo "::warning::$name: the upload stalled or the connection failed" >&2; return 1; }
-              if [ "$code" != 201 ]; then
-                echo "::warning::$name: the asset endpoint answered HTTP $code" >&2; return 1
-              fi
-              # 201 is not quite proof, and this is the failure that would not announce itself:
-              # latest.json pointing at a "starter" asset is a release that looks complete here and
-              # 404s for every updater. Returning 1 sends `retry` round again, which deletes it.
-              state="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --paginate \
-                       --jq ".[] | select(.name == \"$name\") | .state" | head -1)"
-              if [ "$state" != uploaded ]; then
-                echo "::warning::$name: asset is in state '${state:-missing}', not 'uploaded'" >&2; return 1
-              fi
-              echo "uploaded $name"
-            done
-          }
-
-          # The asset endpoint is addressed by release id; every other call here takes the tag.
-          RELEASE_ID="$(retry 3 gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)"
-          [ -n "$RELEASE_ID" ] || { echo "::error::no release found for $TAG"; exit 1; }
-
-          retry 5 upload "$DMG" "$TAR" "$TAR.sig"
-
-          # latest.json has three writers now and no compare-and-swap, so: merge, upload, read back,
-          # re-merge if one of the other jobs clobbered us in between. Whoever loses a round merges
-          # onto the winner's copy, so it converges.
-          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$(basename "$TAR")"
-          for attempt in 1 2 3 4 5; do
-            retry 3 fetch_manifest manifest
-            MANIFEST_VERSION="$(jq -r .version manifest/latest.json)"
-            if [ "$MANIFEST_VERSION" != "$VERSION" ]; then
-              echo "::error::the release's latest.json is for $MANIFEST_VERSION but we built $VERSION"; exit 1
-            fi
-            jq --arg sig "$(cat "$TAR.sig")" --arg url "$URL" \
-              --arg target "$UPDATER_TARGET" \
-              '.platforms[$target] = { signature: $sig, url: $url }' \
-              manifest/latest.json > latest.json
-            retry 3 upload latest.json
-
-            sleep $((3 + RANDOM % 5))
-            retry 3 fetch_manifest check
-            if [ "$(jq -r --arg target "$UPDATER_TARGET" '.platforms[$target].url // ""' check/latest.json)" = "$URL" ]; then
-              echo "latest.json carries $UPDATER_TARGET (attempt $attempt): $(jq -c '.platforms | keys' check/latest.json)"
-              break
-            fi
-            [ "$attempt" -lt 5 ] || { echo "::error::$UPDATER_TARGET kept getting clobbered out of latest.json"; exit 1; }
-            echo "another job clobbered the manifest, re-merging"
-          done
-
-          # Promote to "Latest" only once every platform is in the manifest.
-          #
-          # The updater resolves through /releases/latest/download/latest.json, so whatever is
-          # Latest is what every installed client reads. This block runs identically at the end of
-          # all three release workflows, and only the leg that finds all three keys present flips
-          # the flag. Which leg that is depends on who finishes last, and it does not matter.
-          #
-          # Linux used to own this flip and checked only for its own key, which promoted incomplete
-          # manifests two ways: for a few minutes while Windows or macOS was still building, since
-          # Linux usually finishes first, and for good when one of them failed outright. v0.6.6 was
-          # the second: the macOS leg failed, Linux marked the release Latest anyway, and every
-          # Mac's update check read a manifest with no darwin-aarch64 entry.
-          #
-          # If a leg never finishes, nothing flips: /releases/latest/download/latest.json keeps
-          # resolving to the previous, complete release until someone re-dispatches the failed
-          # workflow. That is deliberate. It holds back the platforms that did build (v0.7.3's Linux
-          # stall looked exactly like this, and still would), but no installed client ever reads a
-          # manifest with no entry for its platform, and the release sitting un-Latest is visible.
-          #
-          # Duplicated verbatim in linux-release.yml, windows-release.yml and macos-release.yml on
-          # purpose: a dispatched run takes the workflow from master but checks out the tag, so a
-          # shared script or composite action would come from the tag and a re-dispatch against an
-          # older one would not pick this up. Keep the three copies byte-identical.
-          #
-          # A release candidate (a version with a `-`, 1.1.0-rc.1) is never Latest, so no stable
-          # install ever reads it. What it moves instead is the beta pointer: a permanent prerelease
-          # tagged `beta` holding one latest.json, which installs on the beta channel read
-          # (`check_beta_update` in commands.rs). A complete stable release moves the pointer too when
-          # it is ahead of what the pointer holds, so beta installs land on 1.1.0 once it ships but
-          # stay on 1.1.0-rc.2 through a 1.0.3 fix. It is also rewritten when it holds this same
-          # version, so a re-run that replaces a binary in place refreshes the beta copy of its
-          # signature: after 1.2.0's Windows installer was swapped (#436), the stale copy failed every
-          # beta install's signature check. The pointer never moves backwards here, so a re-dispatch
-          # against an old tag cannot roll the beta channel back; that is done by hand (RELEASING.md §8).
-          REQUIRED_PLATFORMS='["darwin-aarch64","darwin-x86_64","linux-x86_64","windows-x86_64"]'
-          retry 3 fetch_manifest final
-          HAVE="$(jq -c '.platforms | keys' final/latest.json)"
-          if [ "$HAVE" != "$REQUIRED_PLATFORMS" ]; then
-            echo "::notice::not promoting yet, latest.json carries $HAVE and needs $REQUIRED_PLATFORMS"
-            exit 0
+          if [ -z "${GH_TOKEN:-}" ]; then
           fi
-          if [[ "$VERSION" == *-* ]]; then
-            echo "$TAG is a release candidate: never Latest, beta channel only"
-          else
-            retry 3 gh release edit "$TAG" --latest --repo "$GITHUB_REPOSITORY"
-            echo "All three platforms present, marked $TAG as Latest: $HAVE"
-          fi
-
-          # semver_gt A B: A ranks above B. x.y.z numerically, then a release above its own
-          # prereleases, then prerelease suffixes by version sort. `sort -V` alone gets the middle
-          # rule backwards (it puts 1.1.0-rc.1 after 1.1.0). Same function as scripts/release.sh.
-          semver_gt() {
-            [ "$1" != "$2" ] || return 1
-            local a="${1%%-*}" b="${2%%-*}"
-            if [ "$a" != "$b" ]; then
-              [ "$(printf '%s\n%s\n' "$a" "$b" | sort -V | tail -1)" = "$a" ]
-              return
-            fi
-            [ "$1" != "$a" ] || return 0
-            [ "$2" != "$b" ] || return 1
-            [ "$(printf '%s\n%s\n' "${1#*-}" "${2#*-}" | sort -V | tail -1)" = "${1#*-}" ]
-          }
-          # Created once by hand (RELEASING.md §8), and scripts/release.sh refuses to run without it.
-          # An RC exists for the beta channel, so it fails without one; a stable release is complete
-          # without it and only warns.
-          if ! BETA_ID="$(retry 3 gh api "repos/$GITHUB_REPOSITORY/releases/tags/beta" --jq .id)"; then
-            if [[ "$VERSION" == *-* ]]; then
-              echo "::error::no beta release to point at $TAG, so no install can get it. Create it (RELEASING.md §8) and re-dispatch"
-              exit 1
-            fi
-            echo "::warning::no beta release, so the beta channel was not moved to $TAG"
-            exit 0
-          fi
-          # Read the pointer through the asset list, so a transient error fails the step instead of
-          # reading as "empty" and letting an older version overwrite a newer one.
-          BETA_VERSION=""
-          HAS_MANIFEST="$(retry 3 gh api "repos/$GITHUB_REPOSITORY/releases/$BETA_ID/assets" \
-            --jq '[.[] | select(.name == "latest.json")] | length')"
-          if [ "$HAS_MANIFEST" != 0 ]; then
-            (TAG=beta; retry 3 fetch_manifest beta)
-            BETA_VERSION="$(jq -r .version beta/latest.json)"
-          fi
-          if [ -z "$BETA_VERSION" ] || [ "$VERSION" = "$BETA_VERSION" ] || semver_gt "$VERSION" "$BETA_VERSION"; then
-            (RELEASE_ID="$BETA_ID"; retry 3 upload final/latest.json)
-            echo "beta channel moved to $VERSION (was ${BETA_VERSION:-empty})"
-          else
-            echo "beta channel stays on $BETA_VERSION, which is not behind $VERSION"
-          fi
+          gh release upload "$TAG" "$DMG" --repo "$RELEASES_REPO" --clobber
+          echo "Published $(basename "$DMG") at https://github.com/$RELEASES_REPO/releases/tag/$TAG"

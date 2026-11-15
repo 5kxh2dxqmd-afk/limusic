@@ -42,26 +42,23 @@ jobs:
           git merge -X ours --no-edit upstream/master
           git push origin master
 
-          # Publish the newest stable upstream release in this private mirror. Release notes and
-          # the source tag come from upstream; all binaries and updater URLs are built in this repo.
+          # Mirror the source tag and publish the release in this public repository.
           TAG="$(gh api repos/SimoHypers/limusic/releases/latest --jq .tag_name)"
           git push origin "refs/tags/$TAG:refs/tags/$TAG"
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $TAG already exists in $GITHUB_REPOSITORY"
-            exit 0
-          fi
-
-          VERSION="${TAG#v}"
           NOTES_FILE="$(mktemp)"
           gh api "repos/SimoHypers/limusic/releases/tags/$TAG" --jq .body > "$NOTES_FILE"
-          jq -n --arg version "$VERSION" --rawfile notes "$NOTES_FILE" \
-            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{version:$version,notes:$notes,pub_date:$date,platforms:{}}' > latest.json
-          gh release create "$TAG" latest.json --repo "$GITHUB_REPOSITORY" \
-            --target "$TAG" --title "$TAG" --notes-file "$NOTES_FILE" --latest=false
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --target "$TAG" --title "$TAG" --notes-file "$NOTES_FILE" --latest
+          fi
 
-          # A PAT is required: workflow_dispatch events created with GITHUB_TOKEN are suppressed by
-          # GitHub. The downstream workflows check out the release tag and attach signed assets.
-          gh workflow run "Linux release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$TAG"
-          gh workflow run "Windows release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$TAG"
-          gh workflow run "macOS release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$TAG"
+          # Dispatch with the PAT: workflow_dispatch events from GITHUB_TOKEN are suppressed.
+          # If either public Mac installer is missing, rebuild both and replace the assets.
+          ASSETS="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name] | join("\n")')"
+          VERSION="${TAG#v}"
+          if ! printf '%s\n' "$ASSETS" | grep -Fx "limusic_${VERSION}_aarch64.dmg" >/dev/null \
+             || ! printf '%s\n' "$ASSETS" | grep -Fx "limusic_${VERSION}_x86_64.dmg" >/dev/null; then
+            gh workflow run "macOS release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$TAG"
+          else
+            echo "Both public Mac installers already exist for $TAG"
+          fi
