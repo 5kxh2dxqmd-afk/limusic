@@ -49,7 +49,7 @@ jobs:
           gh api "repos/SimoHypers/limusic/releases/tags/$TAG" --jq .body > "$NOTES_FILE"
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --target "$TAG" --title "$TAG" --notes-file "$NOTES_FILE" --latest
+              --title "$TAG" --notes-file "$NOTES_FILE" --latest
           fi
 
           # Dispatch with the PAT: workflow_dispatch events from GITHUB_TOKEN are suppressed.
