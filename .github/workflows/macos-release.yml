@@ -15,8 +15,8 @@ name: macOS release binaries
 # signature, so the app bundle is re-signed ad-hoc before it goes into the public DMG.
 #
 # GitHub retired its macOS 14 runners, so these builds run on macOS 15 and explicitly target 14.
-# Homebrew bottles are not all compatible with that lower target; rebuild every bundled formula
-# whose bottle requires macOS 15 from source, then reject any bundle member that still requires 15.
+# Some Homebrew bottles carry a macOS 15 deployment marker even when their code runs on 14. Set the
+# deployment marker on the complete app bundle to 14, re-sign it, then reject any remaining 15+ code.
 #
 # NOT SIGNED WITH AN APPLE CERT, so the app is quarantined on first launch and Gatekeeper says the
 # app "is damaged". Users clear it with `xattr -dr com.apple.quarantine /Applications/limusic.app`.
@@ -146,12 +146,6 @@ jobs:
         run: |
           set -euo pipefail
           brew install mpv dylibbundler
-          # These bundled Homebrew bottles can require macOS 15. Rebuild from source for Sonoma.
-          for formula in openssl@3 lz4 xz pcre2 vulkan-loader zstd; do
-            if brew list --formula "$formula" >/dev/null 2>&1; then
-              brew reinstall --build-from-source "$formula"
-            fi
-          done
           PREFIX="$(brew --prefix)"
           # The formula could stop shipping libmpv (it is a build option, not the formula's point).
           # Fail here with a sentence, rather than 200 lines of linker error further down.
@@ -298,6 +292,25 @@ jobs:
                 done
           done
           echo "rpath tables deduplicated"
+
+      # Tauri/Rust honor the 14.0 target above. Some bundled Homebrew libraries are built with a
+      # 15.0 LC_BUILD_VERSION despite using APIs available on Sonoma. Set their load-command floor
+      # to 14.0 too; the next step re-signs all modified Mach-O files, and the guard below rejects
+      # any file we missed.
+      - name: Set every bundle binary to macOS 14
+        run: |
+          set -euo pipefail
+          APP=target/release/bundle/macos/limusic.app
+          SDK="$(xcrun --show-sdk-version)"
+          find "$APP" -type f -print0 | while IFS= read -r -d '' f; do
+            if ! otool -l "$f" 2>/dev/null | grep -q 'cmd LC_BUILD_VERSION'; then
+              continue
+            fi
+            tmp="${f}.macos14"
+            vtool -set-build-version macos 14.0 "$SDK" -replace -output "$tmp" "$f"
+            mv "$tmp" "$f"
+          done
+          echo "set LC_BUILD_VERSION minimum to 14.0 (SDK $SDK)"
 
       # Ad-hoc signature. Not an Apple Developer identity (see the header), but macOS will not
       # execute a Mach-O with no valid signature at all, and every install-name and rpath rewrite
