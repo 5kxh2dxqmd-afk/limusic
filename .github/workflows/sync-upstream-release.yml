@@ -1,0 +1,67 @@
+name: Sync upstream and publish release
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the fork
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: master
+          token: ${{ secrets.FORK_SYNC_TOKEN }}
+          fetch-depth: 0
+
+      - name: Sync upstream master and release tag
+        env:
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Add FORK_SYNC_TOKEN with Contents: Read and write and Actions: Read and write permissions"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/SimoHypers/limusic.git
+          git fetch upstream master --tags
+          git checkout master
+          # Keep fork-specific workflow and updater settings where upstream edits those same lines,
+          # while taking every non-conflicting upstream change automatically.
+          git merge -X ours --no-edit upstream/master
+          git push origin master
+
+          # Publish the newest stable upstream release in this private mirror. Release notes and
+          # the source tag come from upstream; all binaries and updater URLs are built in this repo.
+          TAG="$(gh api repos/SimoHypers/limusic/releases/latest --jq .tag_name)"
+          git push origin "refs/tags/$TAG:refs/tags/$TAG"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists in $GITHUB_REPOSITORY"
+            exit 0
+          fi
+
+          VERSION="${TAG#v}"
+          NOTES_FILE="$(mktemp)"
+          gh api "repos/SimoHypers/limusic/releases/tags/$TAG" --jq .body > "$NOTES_FILE"
+          jq -n --arg version "$VERSION" --rawfile notes "$NOTES_FILE" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{version:$version,notes:$notes,pub_date:$date,platforms:{}}' > latest.json
+          gh release create "$TAG" latest.json --repo "$GITHUB_REPOSITORY" \
+            --target "$TAG" --title "$TAG" --notes-file "$NOTES_FILE" --latest=false
+
+          # A PAT is required: workflow_dispatch events created with GITHUB_TOKEN are suppressed by
+          # GitHub. The downstream workflows check out the release tag and attach signed assets.
+          gh workflow run "Linux release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$TAG"
+          gh workflow run "Windows release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$TAG"
+          gh workflow run "macOS release binaries" --repo "$GITHUB_REPOSITORY" --ref master -f tag="$TAG"

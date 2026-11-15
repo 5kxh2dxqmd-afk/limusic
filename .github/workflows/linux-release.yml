@@ -588,7 +588,7 @@ jobs:
           # signature: after 1.2.0's Windows installer was swapped (#436), the stale copy failed every
           # beta install's signature check. The pointer never moves backwards here, so a re-dispatch
           # against an old tag cannot roll the beta channel back; that is done by hand (RELEASING.md §8).
-          REQUIRED_PLATFORMS='["darwin-aarch64","linux-x86_64","windows-x86_64"]'
+          REQUIRED_PLATFORMS='["darwin-aarch64","darwin-x86_64","linux-x86_64","windows-x86_64"]'
           retry 3 fetch_manifest final
           HAVE="$(jq -c '.platforms | keys' final/latest.json)"
           if [ "$HAVE" != "$REQUIRED_PLATFORMS" ]; then

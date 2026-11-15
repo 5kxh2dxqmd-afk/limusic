@@ -1,8 +1,8 @@
 name: macOS release binaries
 
 # Builds, bundles and signs the macOS app for a release that ALREADY EXISTS, attaches the .dmg and
-# the updater tarball, and adds the `darwin-aarch64` entry to latest.json so Mac installs
-# auto-update too.
+# the updater tarball, and adds entries for both `darwin-aarch64` and `darwin-x86_64` to latest.json
+# so Intel and Apple Silicon Macs auto-update too.
 #
 # Same shape as windows-release.yml: scripts/release.sh publishes the release and dispatches this.
 # Nobody owns a Mac here, so every check this job can make, it makes.
@@ -16,12 +16,9 @@ name: macOS release binaries
 # rewriting a Mach-O invalidates its signature, arm64 macOS refuses to execute unsigned code, so the
 # bundle is re-signed (ad-hoc) before it is archived, and the updater .sig is generated afterwards.
 #
-# ARM ONLY. macos-15 is the oldest Apple Silicon runner GitHub still offers (macos-14 was retired on
-# 2026-11-02 and fails a job at once), and Homebrew bottles are built per macOS version, so the
-# runner's OS is the app's floor exactly like glibc is on Linux: this produces a macOS 15+ arm64
-# build, which is what `minimumSystemVersion` in tauri.macos.conf.json declares. When this runner is
-# retired too, the floor and that key move together.
-# Intel Macs need a second leg on `macos-13` publishing `darwin-x86_64`; add it when someone asks.
+# macos-15 and macos-15-intel are the oldest supported runners for their respective architectures.
+# Homebrew bottles are built per macOS version, so the runner's OS is the app's floor exactly like
+# glibc is on Linux. Both builds target macOS 15+, as declared in tauri.macos.conf.json.
 #
 # NOT SIGNED WITH AN APPLE CERT, so the app is quarantined on first launch and Gatekeeper says the
 # app "is damaged". Users clear it with `xattr -dr com.apple.quarantine /Applications/limusic.app`.
@@ -63,8 +60,20 @@ concurrency:
 jobs:
   build:
     # PINNED. macos-latest tracks the newest macOS, and since every bundled Homebrew dylib is built
-    # for the runner's OS, that would silently raise the floor for users. Oldest arm64 runner wins.
-    runs-on: macos-15
+    # for the runner's OS, that would silently raise the floor for users.
+    strategy:
+      fail-fast: false
+      # The two legs both merge their platform into the same latest.json asset.
+      max-parallel: 1
+      matrix:
+        include:
+          - runner: macos-15
+            arch: aarch64
+            updater_target: darwin-aarch64
+          - runner: macos-15-intel
+            arch: x86_64
+            updater_target: darwin-x86_64
+    runs-on: ${{ matrix.runner }}
     # A healthy run is ~15 min, ~25 on a cold cargo cache (brew install mpv alone is a few minutes).
     timeout-minutes: 45
     steps:
@@ -74,6 +83,8 @@ jobs:
           TAG="${{ inputs.tag }}"
           [ -n "$TAG" ] || { echo "::error::no tag to build for"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ARCH=${{ matrix.arch }}" >> "$GITHUB_ENV"
+          echo "UPDATER_TARGET=${{ matrix.updater_target }}" >> "$GITHUB_ENV"
 
       # Actions pinned to commit SHAs, not tags: `@v4` is mutable and `rust-toolchain@stable` is a
       # branch. This job holds TAURI_SIGNING_PRIVATE_KEY and builds what users auto-update to, so
@@ -270,8 +281,7 @@ jobs:
             #
             # `otool -l` prints the load commands of every slice, so on a universal binary one
             # legitimate rpath per architecture would count as a duplicate and -delete_rpath would
-            # then strip it from all of them. Thin arm64 only here; count per `-arch` if the Intel
-            # leg in the header ever becomes a fat build instead of a second job.
+            # then strip it from all of them. Each runner builds one thin architecture.
             otool -l "$f" 2>/dev/null \
               | awk '/LC_RPATH/{g=1} g&&/^[[:space:]]*path /{sub(/^[[:space:]]*path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print; g=0}' \
               | sort | uniq -c | while read -r n rp; do
@@ -288,7 +298,7 @@ jobs:
           done
           echo "rpath tables deduplicated"
 
-      # Ad-hoc signature. Not an Apple Developer identity (see the header), but arm64 macOS will not
+      # Ad-hoc signature. Not an Apple Developer identity (see the header), but macOS will not
       # execute a Mach-O with no valid signature at all, and every install-name and rpath rewrite
       # invalidated the one the linker put there. This is the difference between an app that opens
       # and one that dies with "Killed: 9".
@@ -370,12 +380,12 @@ jobs:
             echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set, the build would produce an unsignable update"
             exit 1
           fi
-          TAR="target/release/bundle/macos/limusic_${VERSION}_aarch64.app.tar.gz"
+          TAR="target/release/bundle/macos/limusic_${VERSION}_${ARCH}.app.tar.gz"
           # cd into the bundle dir rather than `tar -C`, so there is no question about whether the
           # archive path is resolved before or after the chdir. The archive must contain the .app
           # at its root: that is what the updater extracts over the installed one.
           (cd target/release/bundle/macos \
-            && COPYFILE_DISABLE=1 tar -czf "limusic_${VERSION}_aarch64.app.tar.gz" limusic.app)
+            && COPYFILE_DISABLE=1 tar -czf "limusic_${VERSION}_${ARCH}.app.tar.gz" limusic.app)
           tauri signer sign "$TAR"
           [ -f "$TAR.sig" ] || { echo "::error::tauri signer produced no .sig for $TAR"; exit 1; }
           echo "TAR=$TAR" >> "$GITHUB_ENV"
@@ -400,7 +410,7 @@ jobs:
         run: |
           set -euo pipefail
           APP=target/release/bundle/macos/limusic.app
-          DMG="target/release/bundle/dmg/limusic_${VERSION}_aarch64.dmg"
+          DMG="target/release/bundle/dmg/limusic_${VERSION}_${ARCH}.dmg"
           STAGE="$(mktemp -d)/Limusic"
           mkdir -p "$STAGE" "$(dirname "$DMG")"
           # ditto, not cp: it is the copy that preserves a bundle's metadata and signature intact.
@@ -523,17 +533,18 @@ jobs:
               echo "::error::the release's latest.json is for $MANIFEST_VERSION but we built $VERSION"; exit 1
             fi
             jq --arg sig "$(cat "$TAR.sig")" --arg url "$URL" \
-              '.platforms["darwin-aarch64"] = { signature: $sig, url: $url }' \
+              --arg target "$UPDATER_TARGET" \
+              '.platforms[$target] = { signature: $sig, url: $url }' \
               manifest/latest.json > latest.json
             retry 3 upload latest.json
 
             sleep $((3 + RANDOM % 5))
             retry 3 fetch_manifest check
-            if [ "$(jq -r '.platforms["darwin-aarch64"].url // ""' check/latest.json)" = "$URL" ]; then
-              echo "latest.json carries darwin-aarch64 (attempt $attempt): $(jq -c '.platforms | keys' check/latest.json)"
+            if [ "$(jq -r --arg target "$UPDATER_TARGET" '.platforms[$target].url // ""' check/latest.json)" = "$URL" ]; then
+              echo "latest.json carries $UPDATER_TARGET (attempt $attempt): $(jq -c '.platforms | keys' check/latest.json)"
               break
             fi
-            [ "$attempt" -lt 5 ] || { echo "::error::darwin-aarch64 kept getting clobbered out of latest.json"; exit 1; }
+            [ "$attempt" -lt 5 ] || { echo "::error::$UPDATER_TARGET kept getting clobbered out of latest.json"; exit 1; }
             echo "another job clobbered the manifest, re-merging"
           done
 
@@ -571,7 +582,7 @@ jobs:
           # signature: after 1.2.0's Windows installer was swapped (#436), the stale copy failed every
           # beta install's signature check. The pointer never moves backwards here, so a re-dispatch
           # against an old tag cannot roll the beta channel back; that is done by hand (RELEASING.md §8).
-          REQUIRED_PLATFORMS='["darwin-aarch64","linux-x86_64","windows-x86_64"]'
+          REQUIRED_PLATFORMS='["darwin-aarch64","darwin-x86_64","linux-x86_64","windows-x86_64"]'
           retry 3 fetch_manifest final
           HAVE="$(jq -c '.platforms | keys' final/latest.json)"
           if [ "$HAVE" != "$REQUIRED_PLATFORMS" ]; then
