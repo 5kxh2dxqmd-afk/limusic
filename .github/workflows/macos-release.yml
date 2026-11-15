@@ -44,13 +44,22 @@ on:
         required: false
         default: false
         type: boolean
+      arch:
+        description: Architecture to build (or both)
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - aarch64
+          - x86_64
 
 permissions:
   contents: write # upload assets onto the release
 
 # Prevent duplicate workflow runs for the same tag from replacing each other's release assets.
 concurrency:
-  group: macos-release-${{ inputs.tag }}
+  group: macos-release-${{ inputs.tag }}-${{ inputs.arch || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -60,12 +69,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-15
-            arch: aarch64
-          - runner: macos-15-intel
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
+        arch: ${{ fromJSON(inputs.arch == 'all' && '["aarch64","x86_64"]' || format('["{0}"]', inputs.arch)) }}
+    runs-on: ${{ matrix.arch == 'aarch64' && 'macos-15' || 'macos-15-intel' }}
     # A healthy run is ~15 min, ~25 on a cold cargo cache (brew install mpv alone is a few minutes).
     timeout-minutes: 45
     steps:
