@@ -22,7 +22,12 @@ tar = { version = "0.4", default-features = false }
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 # ONNX Runtime is never linked on any platform; it is loaded by full path through `karaoke::runtime`.
 # api-24 = ONNX Runtime 1.24.x (NuGet Microsoft.ML.OnnxRuntime.DirectML 1.24.4).
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "tracing", "load-dynamic", "api-24"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "tracing", "load-dynamic"] }
+
+# Keep the requested C API matched to each runtime package. The official Intel macOS runtime is
+# 1.23.2 (API 23); all other packaged runtimes are 1.24.4 (API 24).
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["api-24"] }
 
 [dev-dependencies]
 serde_json = "1"
@@ -34,12 +39,16 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 # Windows: DirectML feature adds DirectML provider support.
 [target.'cfg(windows)'.dependencies]
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["directml"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["directml", "api-24"] }
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dxgi", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_System_LibraryLoader"] }
 
 # macOS aarch64: CoreML feature adds CoreML provider support.
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-ort = { version = "=2.0.0-rc.13", default-features = false, features = ["coreml"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["coreml", "api-24"] }
+
+# The last official Microsoft macOS Intel runtime is ONNX Runtime 1.23.2, whose highest C API is 23.
+[target.'cfg(all(target_os = "macos", target_arch = "x86_64"))'.dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["api-23"] }
 
 [[example]]
 name = "inspect"

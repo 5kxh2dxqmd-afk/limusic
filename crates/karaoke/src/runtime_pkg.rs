@@ -42,11 +42,15 @@ pub struct Part {
 #[derive(Debug, Clone)]
 pub struct RuntimePackage {
     pub platform: &'static str,
+    /// Runtime library version used by this platform (may differ where upstream has dropped an
+    /// architecture from its current release).
+    pub version: &'static str,
     pub parts: &'static [Part],
 }
 
 pub static LINUX_X86_64: RuntimePackage = RuntimePackage {
     platform: "linux-x86_64",
+    version: VERSION,
     parts: &[
         Part {
             name: "onnxruntime",
@@ -124,6 +128,7 @@ pub static LINUX_X86_64: RuntimePackage = RuntimePackage {
 
 pub static MACOS_AARCH64: RuntimePackage = RuntimePackage {
     platform: "macos-aarch64",
+    version: VERSION,
     parts: &[Part {
         name: "onnxruntime",
         url: "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-osx-arm64-1.24.4.tgz",
@@ -165,12 +170,59 @@ pub static MACOS_AARCH64: RuntimePackage = RuntimePackage {
     }],
 };
 
+/// Microsoft stopped publishing Intel macOS builds in ONNX Runtime 1.24. Use the final official
+/// Intel macOS package and request its supported C API level in the x86_64 Cargo target config.
+pub static MACOS_X86_64: RuntimePackage = RuntimePackage {
+    platform: "macos-x86_64",
+    version: "1.23.2",
+    parts: &[Part {
+        name: "onnxruntime",
+        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.23.2/onnxruntime-osx-x86_64-1.23.2.tgz",
+        archive_size: 11676322,
+        archive_sha256: "d10359e16347b57d9959f7e80a225a5b4a66ed7d7e007274a15cae86836485a6",
+        fetch_size: 11676322,
+        kind: ArchiveKind::Tgz,
+        hosts: GITHUB_HOSTS,
+        files: &[
+            PartFile {
+                entry: "./onnxruntime-osx-x86_64-1.23.2/lib/libonnxruntime.1.23.2.dylib",
+                dest: "libonnxruntime.1.23.2.dylib",
+                size: 39742608,
+                sha256: "8c9c78de65ea3786f987c0d980e9c1b13a3a5fbc6b3e2965ba05b450e6e4c054",
+                optional: false,
+            },
+            PartFile {
+                entry: "./onnxruntime-osx-x86_64-1.23.2/LICENSE",
+                dest: "LICENSE",
+                size: 0,
+                sha256: "",
+                optional: true,
+            },
+            PartFile {
+                entry: "./onnxruntime-osx-x86_64-1.23.2/ThirdPartyNotices.txt",
+                dest: "ThirdPartyNotices.txt",
+                size: 0,
+                sha256: "",
+                optional: true,
+            },
+            PartFile {
+                entry: "./onnxruntime-osx-x86_64-1.23.2/Privacy.md",
+                dest: "Privacy.md",
+                size: 0,
+                sha256: "",
+                optional: true,
+            },
+        ],
+    }],
+};
+
 pub const NUGET_HOSTS: &[&str] = &["api.nuget.org"];
 pub const PYPI_HOSTS: &[&str] = &["files.pythonhosted.org"];
 
 /// Windows: onnxruntime.dll from the official DirectML NuGet package (whole package, 12.5 MB) and DirectML.dll from the 202 MB Microsoft.AI.DirectML package, of which only the one file is fetched with Range requests.
 pub static WINDOWS_X86_64: RuntimePackage = RuntimePackage {
     platform: "windows-x86_64",
+    version: VERSION,
     parts: &[
         Part {
             name: "onnxruntime",
@@ -256,6 +308,10 @@ pub fn current() -> Option<&'static RuntimePackage> {
     {
         Some(&MACOS_AARCH64)
     }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        Some(&MACOS_X86_64)
+    }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     {
         Some(&WINDOWS_X86_64)
@@ -263,6 +319,7 @@ pub fn current() -> Option<&'static RuntimePackage> {
     #[cfg(not(any(
         all(target_os = "linux", target_arch = "x86_64"),
         all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
         all(target_os = "windows", target_arch = "x86_64")
     )))]
     {
@@ -270,9 +327,9 @@ pub fn current() -> Option<&'static RuntimePackage> {
     }
 }
 
-/// Folder name under the app's data dir where the runtime lives: format!("onnxruntime-{VERSION}")
+/// Folder name under the app's data dir where the runtime lives.
 pub fn dir_name() -> String {
-    format!("onnxruntime-{VERSION}")
+    format!("onnxruntime-{}", current().map_or(VERSION, |pkg| pkg.version))
 }
 
 pub fn main_lib(pkg: &RuntimePackage) -> &PartFile {
@@ -1202,6 +1259,7 @@ mod tests {
 
         let pkg = RuntimePackage {
             platform: "multi-test",
+            version: "test",
             parts: Box::leak(vec![part1.clone(), part2.clone()].into_boxed_slice()),
         };
 
@@ -1668,13 +1726,13 @@ mod tests {
 
     #[test]
     fn test_pinned_packages_sanity() {
-        for pkg in &[&LINUX_X86_64, &MACOS_AARCH64, &WINDOWS_X86_64] {
+        for pkg in &[&LINUX_X86_64, &MACOS_AARCH64, &MACOS_X86_64, &WINDOWS_X86_64] {
             assert!(total_archive_size(pkg) > 0);
             let main = main_lib(pkg);
             if pkg.platform.starts_with("windows") {
                 assert_eq!(main.dest, "onnxruntime.dll");
             } else {
-                assert!(main.dest.contains(VERSION));
+                assert!(main.dest.contains(pkg.version));
             }
 
             if pkg.platform == "windows-x86_64" {
@@ -1727,7 +1785,8 @@ mod tests {
                     assert_eq!(part.fetch_size, part.archive_size);
 
                     let prefix = format!(
-                        "https://github.com/microsoft/onnxruntime/releases/download/v{VERSION}/"
+                        "https://github.com/microsoft/onnxruntime/releases/download/v{}/",
+                        pkg.version
                     );
                     assert!(part.url.starts_with(&prefix));
                     assert!(part.url.ends_with(".tgz"));

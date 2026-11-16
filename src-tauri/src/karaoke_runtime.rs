@@ -126,7 +126,7 @@ mod tests {
             files,
         };
         let parts = Box::leak(Box::new([part]));
-        karaoke::runtime_pkg::RuntimePackage { platform: "fake", parts }
+        karaoke::runtime_pkg::RuntimePackage { platform: "fake", version: "test", parts }
     }
 
     #[test]
