@@ -92,7 +92,19 @@ jobs:
           ref: ${{ steps.rel.outputs.tag }}
           persist-credentials: false
 
-      # The tag is the contract: the binary must come from the source tag.
+      # Upstream release tags do not include fork-only commits. Keep the fork's Intel Karaoke
+      # runtime support in every future beta build while leaving stable releases built from their
+      # exact upstream source tag. These files are compatible with the matching latest beta source.
+      - name: Overlay fork Karaoke runtime support on beta builds
+        if: contains(steps.rel.outputs.tag, '-')
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin master
+          git checkout origin/master -- \
+            crates/karaoke/Cargo.toml \
+            crates/karaoke/src/runtime_pkg.rs
+
+      # The release tag is the contract: its app version must match the build.
       #
       # A dry run is allowed to disagree, because that is the only way to test this workflow against
       # a branch (`tag: master`) instead of a published tag. Nothing is uploaded on a dry run, so a
