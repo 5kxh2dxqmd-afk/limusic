@@ -279,7 +279,7 @@ pub async fn get_queue(state: St<'_>) -> Result<serde_json::Value, String> {
 /// `visitor_data`) and internal blobs (`queue_json`, `queue_index`, `queue_position`) never cross
 /// into the webview: they'd otherwise ship the login credential to the renderer on every open, and
 /// the webview can't overwrite them either.
-const UI_SETTINGS: [&str; 33] = [
+const UI_SETTINGS: [&str; 34] = [
     "volume",
     "proxy",
     "quality",
@@ -297,6 +297,7 @@ const UI_SETTINGS: [&str; 33] = [
     "autoplay",
     "hide_videos",
     "prevent_duplicates",
+    "auto_pause_other_audio",
     "update_banner",
     "update_channel",
     "lyrics_providers",
@@ -520,6 +521,10 @@ pub async fn set_setting(
     // to follow without waiting for the next track.
     if key == "discord_rpc_config" {
         state.set_discord_config(&value);
+    }
+    // Takes effect at once: if other media is already playing, the music pauses without waiting.
+    if key == "auto_pause_other_audio" {
+        state.inner().set_auto_pause_enabled(value == "true");
     }
     // The Scrobbling tab's settings, read whole each time: the two switches from #231 keep rows of
     // their own, and the scrobbler wants all of it in one message.
@@ -2832,6 +2837,7 @@ pub async fn limusic_live_lyrics(video_id: String) -> Option<crate::lyrics::Lyri
 }
 
 /// `verdict` is `approve` or `reject`. Resolves with the service's status for the revision.
+/// `lines` with an approval is the reviewer's fix (Fix before approving).
 #[tauri::command]
 pub async fn limusic_review(
     state: St<'_>,
@@ -2839,8 +2845,40 @@ pub async fn limusic_review(
     video_id: String,
     verdict: String,
     reason: Option<String>,
+    lines: Option<Vec<crate::lyrics::LyricLine>>,
 ) -> Result<String, String> {
-    crate::limusic::review_verdict(state.inner(), revision, &video_id, &verdict, reason).await
+    crate::limusic::review_verdict(state.inner(), revision, &video_id, &verdict, reason, lines)
+        .await
+}
+
+/// Why a reviewer rejected my latest version of the song, for the editor. `None` when there is
+/// nothing to say.
+#[tauri::command]
+pub async fn limusic_my_rejection(
+    state: St<'_>,
+    video_id: String,
+) -> Result<Option<crate::limusic::Rejection>, String> {
+    Ok(crate::limusic::my_rejection(state.inner(), &video_id).await)
+}
+
+/// The lyrics team (admins only): staff and contributors, or the handles holding `q`.
+#[tauri::command]
+pub async fn limusic_admin_accounts(
+    state: St<'_>,
+    q: String,
+) -> Result<Vec<crate::limusic::Member>, String> {
+    crate::limusic::admin_accounts(state.inner(), &q).await
+}
+
+/// Set a role, ban or unban (admins only).
+#[tauri::command]
+pub async fn limusic_admin_update(
+    state: St<'_>,
+    handle: String,
+    role: Option<String>,
+    banned: Option<bool>,
+) -> Result<crate::limusic::Member, String> {
+    crate::limusic::admin_update(state.inner(), &handle, role, banned).await
 }
 
 /// Put an earlier revision back, or `null` for no lyric. Resolves with the live revision.
