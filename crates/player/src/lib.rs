@@ -268,6 +268,13 @@ fn new_mpv(cache_dir: &str) -> Result<Mpv, Error> {
     // Mirror the Phase-0 spike: create, then set_property (setting some options during the
     // pre-init phase returns PROPERTY_NOT_FOUND on this mpv build).
     let mpv = Mpv::new()?;
+    // AVFoundation routes PCM through AVSampleBufferAudioRenderer, which lets macOS expose
+    // Spatialize Stereo for this app's stream (as it does for Safari/WebKit). CoreAudio's default
+    // output driver bypasses that renderer, so AirPods report Spatial Audio as unavailable.
+    // The macOS release build includes mpv's avfoundation driver and the app is always launched
+    // from its bundle, as required by mpv when system spatialization is enabled.
+    #[cfg(target_os = "macos")]
+    mpv.set_property("ao", "avfoundation")?;
     // No picture until the app asks for one (`set_video_visible`). When it does, it goes through
     // the render API to the app's own GL surface: pinned, because left to probe mpv opens a window
     // of its own. `video-timing-offset=0` because otherwise each render call blocks until its

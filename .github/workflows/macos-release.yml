@@ -102,7 +102,8 @@ jobs:
           git fetch --no-tags origin master
           git checkout origin/master -- \
             crates/karaoke/Cargo.toml \
-            crates/karaoke/src/runtime_pkg.rs
+            crates/karaoke/src/runtime_pkg.rs \
+            crates/player/src/lib.rs
 
       # The release tag is the contract: its app version must match the build.
       #
