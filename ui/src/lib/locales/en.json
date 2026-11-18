@@ -580,7 +580,7 @@
 			"intro": "Link Limusic on your phone: each one shows and controls what the other plays, and the music moves to whichever you pick.",
 			"link_phone": "Link a phone",
 			"link_another": "Link another phone",
-			"step_open": "On your phone, open Limusic: Settings › Integrations › Devices",
+			"step_open": "On your phone, open Limusic: Settings › Devices",
 			"step_type": "Type this code",
 			"custom_server": "On this server, type {invite}",
 			"expires_in": "Expires in {time}",
@@ -850,9 +850,21 @@
 			"action_show_app_hint": "Bring the Limusic window to the foreground."
 		},
 		"data": {
-			"clear_cache": "Clear image and stream cache",
-			"clear_cache_hint": "Frees up disk space by clearing cached thumbnails and audio chunks.",
-			"clear_cache_button": "Clear cache now"
+			"clear_cache_button": "Clear cache",
+			"used": "Space used",
+			"used_hint": "Everything Limusic keeps on this computer.",
+			"library": "Library and settings",
+			"library_hint": "Your settings, listening history, saved lyrics and local music library.",
+			"audio": "Audio cache",
+			"audio_hint": "Audio held while songs play, and the links saved to start them faster. Clearing it can also fix songs that stop loading.",
+			"karaoke": "Karaoke versions",
+			"models": "Karaoke models",
+			"models_hint": "The vocal removal models you downloaded, and the engine that runs them.",
+			"manage": "Manage",
+			"web": "Images and web cache",
+			"web_hint": "Artwork and other files the app window has loaded, kept by your system's web engine.",
+			"other": "Other",
+			"other_hint": "Logs, artwork from your local files, and small files Limusic needs to play songs."
 		},
 		"about": {
 			"description": "A beautiful, fast, and lightweight desktop music player powered by Tauri and Svelte.",
@@ -1015,6 +1027,8 @@
 			"lb_token_hint": "Paste your user token here. You can copy it from your ListenBrainz settings page.",
 			"lb_open_settings": "Open ListenBrainz settings",
 			"lb_token_placeholder": "ListenBrainz user token",
+			"lb_custom_instance": "Custom ListenBrainz instance",
+			"lb_url_label": "Instance API address",
 			"lb_problem_email": "Verify your MetaBrainz email so ListenBrainz accepts your listens.",
 			"lb_problem_rejected": "ListenBrainz no longer accepts this token. Connect again with a new one.",
 			"lb_verify_email": "Verify email"
@@ -1568,6 +1582,8 @@
 	},
 	"review": {
 		"title": "Review lyrics",
+		"reviewing": "{name} is reviewing",
+		"taken": "{name} is reviewing this one. They opened it {when}.",
 		"waiting": "{count} waiting, the oldest first",
 		"empty_title": "All caught up",
 		"empty": "Nothing is waiting for review.",

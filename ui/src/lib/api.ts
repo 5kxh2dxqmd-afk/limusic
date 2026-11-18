@@ -567,6 +567,9 @@ export const setSetting = (key: string, value: string) =>
 export const getStreamClients = () => invoke<string[]>('get_stream_clients');
 /** Wipe both cache tiers (URL cache + mpv on-disk audio cache). */
 export const clearCaches = () => invoke<void>('clear_caches');
+/** Bytes on disk by kind, for Settings > Data & storage (#705). */
+export type StorageUsage = Record<'library' | 'audio' | 'karaoke' | 'models' | 'web' | 'other', number>;
+export const storageUsage = () => invoke<StorageUsage>('storage_usage');
 /** Set the app icon to a PNG the user picked, or restore the bundled one with `null` (#173). */
 export const setAppIcon = (path: string | null) => invoke<void>('set_app_icon', { path });
 /** Path to the custom app icon, granted to the asset protocol. `null` when the bundled one is in use. */
@@ -1438,6 +1441,8 @@ export interface LimusicQueueItem {
 	kind: string;
 	created_at: number;
 	reports: number;
+	/** Another reviewer who has it open. */
+	reviewing?: string | null;
 }
 export interface LimusicQueue {
 	items: LimusicQueueItem[];
@@ -1465,6 +1470,10 @@ export interface LimusicRevision {
 /** Oldest first, 50 a page. */
 export const limusicReviewQueue = (after?: number) =>
 	invoke<LimusicQueue>('limusic_review_queue', { after: after ?? null });
+/** Mark the submission this reviewer has open, null to let go. Resolves with another reviewer who
+ *  has it already (this one then holds nothing), else null. */
+export const limusicReviewClaim = (revision: number | null) =>
+	invoke<{ by: string; since: number } | null>('limusic_review_claim', { revision });
 export const limusicReviewRevision = (revision: number) =>
 	invoke<LimusicRevision>('limusic_review_revision', { revision });
 /** The song's live community lyric from the service itself (never a lyrics provider), or null. */
@@ -1594,8 +1603,8 @@ export interface ListenBrainzState {
 }
 export const listenbrainzStatus = () => invoke<ListenBrainzState>('listenbrainz_status');
 /** Validates the pasted user token and stores it. Rejects on a bad token or no network. */
-export const listenbrainzConnect = (token: string) =>
-	invoke<void>('listenbrainz_connect', { token });
+export const listenbrainzConnect = (token: string, url?: string) =>
+	invoke<void>('listenbrainz_connect', { token, url });
 export const listenbrainzDisconnect = () => invoke<void>('listenbrainz_disconnect');
 export const onListenBrainzState = (cb: (s: ListenBrainzState) => void): Promise<UnlistenFn> =>
 	listen<ListenBrainzState>('listenbrainz-state', (e) => cb(e.payload));
