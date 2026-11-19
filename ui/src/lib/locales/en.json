@@ -236,6 +236,7 @@
 		"search": "Search",
 		"library": "Library",
 		"settings": "Settings",
+		"discord": "Join the Limusic Discord",
 		"listen_together": "Listen Together",
 		"new_playlist": "New Playlist",
 		"account": "Account",
@@ -552,6 +553,13 @@
 	},
 	"settings": {
 		"title": "Settings",
+		"search": {
+			"placeholder": "Search settings",
+			"hint": "Enter opens the first result, Esc clears the search.",
+			"empty": "No settings match “{query}”",
+			"empty_hint": "Try a shorter word, or one from a setting's description.",
+			"shown_when": "Shown when “{setting}” is on"
+		},
 		"tabs": {
 			"general": "General",
 			"general_hint": "History, integrations and how the app starts.",
@@ -891,6 +899,9 @@
 			"report_issue": "Open the bug form",
 			"report_issue_hint": "Opens GitHub in your browser, with the version and system filled in.",
 			"report_issue_button": "Report",
+			"discord": "Join the Discord",
+			"discord_hint": "Get help, share ideas, and hear about new versions and betas first.",
+			"discord_button": "Open Discord",
 			"kofi": "Buy me a coffee",
 			"kofi_hint": "Limusic is free and stays free. Ko-fi is there if you feel like chipping in.",
 			"kofi_button": "Open Ko-fi"
@@ -1926,9 +1937,12 @@
 		"from_spotify": "From Spotify",
 		"update": "Update",
 		"updating": "Updating…",
-		"update_tooltip": "Add what’s new in the Spotify playlist and take out what left it",
+		"update_tooltip": "Add what’s new in the Spotify playlist, take out what left it, and follow its order",
 		"update_done": "Updated from Spotify: {added} added, {removed} removed",
 		"update_none": "Already up to date with Spotify",
+		"keep_updated": "Keep up to date with Spotify",
+		"keep_updated_desc": "Limusic checks the Spotify playlist when it starts and every few hours, and adds, removes and reorders songs to match.",
+		"auto_update_done": "{name} updated from Spotify: {added} added, {removed} removed",
 		"nudge_title": "Coming from Spotify?",
 		"nudge_desc": "Bring your playlists and Liked Songs over in a few clicks.",
 		"errors": {
