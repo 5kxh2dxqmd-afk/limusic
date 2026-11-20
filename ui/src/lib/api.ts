@@ -556,11 +556,6 @@ export interface PlaybackSnapshot {
 }
 export const getPlayback = () => invoke<PlaybackSnapshot>('get_playback');
 
-/** Linux: whether the page covers the window's whole rectangle (no rounded corners, no video
- *  hole), so the shell can drop the webview's alpha channel. A no-op elsewhere. */
-export const setWebviewOpaque = (opaque: boolean) =>
-	invoke<void>('set_webview_opaque', { opaque });
-
 // --- settings (context/11) -----------------------------------------------------------------
 export const getSettings = () => invoke<Record<string, string>>('get_settings');
 export const setSetting = (key: string, value: string) =>
@@ -1715,8 +1710,9 @@ export interface LinkDevice {
 	playing: boolean;
 }
 export interface LinkState {
-	/** `off`: no link. `unsupported`: the server predates linking and never answered. */
-	status: 'off' | 'connecting' | 'connected' | 'unsupported';
+	/** `off`: no link. `unsupported`: a server of the user's own predates linking and never
+	 *  answered. `unreachable`: no code came back in time, the network is in the way. */
+	status: 'off' | 'connecting' | 'connected' | 'unsupported' | 'unreachable';
 	error: string | null;
 	/** The server the link was made on; empty means the default. */
 	server: string;
