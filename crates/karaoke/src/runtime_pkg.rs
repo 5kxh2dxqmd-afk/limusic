@@ -172,42 +172,43 @@ pub static MACOS_AARCH64: RuntimePackage = RuntimePackage {
 };
 
 /// Microsoft stopped publishing Intel macOS builds in ONNX Runtime 1.24. Use the final official
-/// Intel macOS package and request its supported C API level in the x86_64 Cargo target config.
+/// Intel macOS package from NuGet and request its supported C API level in the x86_64 Cargo target
+/// config.
 pub static MACOS_X86_64: RuntimePackage = RuntimePackage {
     platform: "macos-x86_64",
     version: "1.23.2",
     parts: &[Part {
         name: "onnxruntime",
-        url: "https://github.com/microsoft/onnxruntime/releases/download/v1.23.2/onnxruntime-osx-x86_64-1.23.2.tgz",
-        archive_size: 11676322,
-        archive_sha256: "d10359e16347b57d9959f7e80a225a5b4a66ed7d7e007274a15cae86836485a6",
-        fetch_size: 11676322,
-        kind: ArchiveKind::Tgz,
-        hosts: GITHUB_HOSTS,
+        url: "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.23.2/microsoft.ml.onnxruntime.1.23.2.nupkg",
+        archive_size: 123371574,
+        archive_sha256: "",
+        fetch_size: 11564740,
+        kind: ArchiveKind::ZipRange,
+        hosts: NUGET_HOSTS,
         files: &[
             PartFile {
-                entry: "./onnxruntime-osx-x86_64-1.23.2/lib/libonnxruntime.1.23.2.dylib",
+                entry: "runtimes/osx-x64/native/libonnxruntime.dylib",
                 dest: "libonnxruntime.1.23.2.dylib",
                 size: 39742608,
                 sha256: "8c9c78de65ea3786f987c0d980e9c1b13a3a5fbc6b3e2965ba05b450e6e4c054",
                 optional: false,
             },
             PartFile {
-                entry: "./onnxruntime-osx-x86_64-1.23.2/LICENSE",
+                entry: "LICENSE",
                 dest: "LICENSE",
                 size: 0,
                 sha256: "",
                 optional: true,
             },
             PartFile {
-                entry: "./onnxruntime-osx-x86_64-1.23.2/ThirdPartyNotices.txt",
-                dest: "ThirdPartyNotices.txt",
+                entry: "ThirdPartyNotices.txt",
+                dest: "licenses/onnxruntime-ThirdPartyNotices.txt",
                 size: 0,
                 sha256: "",
                 optional: true,
             },
             PartFile {
-                entry: "./onnxruntime-osx-x86_64-1.23.2/Privacy.md",
+                entry: "Privacy.md",
                 dest: "Privacy.md",
                 size: 0,
                 sha256: "",
@@ -1773,23 +1774,6 @@ mod tests {
                         .chars()
                         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
                     assert_eq!(part.fetch_size, part.archive_size);
-                } else {
-                    assert_eq!(part.archive_sha256.len(), 64);
-                    assert!(part
-                        .archive_sha256
-                        .chars()
-                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()));
-                    assert!(part.hosts.contains(&"github.com"));
-
-                    assert!(part.fetch_size > 0);
-                    assert_eq!(part.fetch_size, part.archive_size);
-
-                    let prefix = format!(
-                        "https://github.com/microsoft/onnxruntime/releases/download/v{}/",
-                        pkg.version
-                    );
-                    assert!(part.url.starts_with(&prefix));
-                    assert!(part.url.ends_with(".tgz"));
                 }
 
                 assert!(part.files.iter().any(|f| !f.sha256.is_empty() && !f.optional));
