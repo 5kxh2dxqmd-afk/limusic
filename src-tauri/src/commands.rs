@@ -182,6 +182,15 @@ pub async fn toggle_shuffle(state: St<'_>) -> Result<(), String> {
     Ok(())
 }
 
+/// Set shuffle on the playing queue without cycling: `mode` ∈ "off" | "on" | "dynamic". The page
+/// shuffle menu's pick when the queue already plays that page.
+#[tauri::command]
+pub async fn set_shuffle(state: St<'_>, mode: String) -> Result<(), String> {
+    let mode = crate::state::Shuffle::parse(&mode).ok_or("unknown shuffle mode")?;
+    state.inner().clone().set_shuffle_mode(mode).await;
+    Ok(())
+}
+
 /// `mode` ∈ "off" | "all" | "one".
 #[tauri::command]
 pub async fn set_repeat(state: St<'_>, mode: String) -> Result<(), String> {
@@ -1504,8 +1513,8 @@ fn on_repeat_songs(state: &Arc<AppState>) -> Vec<SongItem> {
 
 /// A play record is the whole `SongItem` as it sat in the queue, so it carries that slot's queue
 /// metadata: `queued`/`queued_by` when the track was "added to queue" (in a Listen Together session,
-/// stamped with who added it), `autoplay` when radio appended it, `set_video_id` from whatever
-/// playlist it was played from. None of that describes the song, so On Repeat sheds it: otherwise
+/// stamped with who added it), `autoplay` when radio appended it, `suggested` when dynamic shuffle
+/// lined it up, `set_video_id` from whatever playlist it was played from. None of that describes the song, so On Repeat sheds it: otherwise
 /// the row wears a session member's name forever, and playing On Repeat drops it into "Next in
 /// queue" instead of the playlist. Strips on read so rows already stored this way are fixed too.
 fn shed_queue_context(s: SongItem) -> SongItem {
@@ -1515,6 +1524,7 @@ fn shed_queue_context(s: SongItem) -> SongItem {
         queued_from: None,
         queued_by: None,
         autoplay: false,
+        suggested: false,
         set_video_id: None,
         added_by: None,
         added_by_avatars: Vec::new(),
@@ -1656,7 +1666,10 @@ pub async fn get_browse_grid(
 /// panel's "Next from" header; `shuffle: true` (page Shuffle buttons) turns shuffle on for
 /// this queue — pass the items in their real order, the backend shuffles. `continuation` is the
 /// page's next-page token when it has one: pass the tracks that are loaded and the backend walks
-/// the rest into the queue in the background, so playback starts on page 1.
+/// the rest into the queue in the background, so playback starts on page 1. `dynamic` is the page
+/// shuffle menu's pick: `true` starts dynamic shuffle (shuffle implied), `false` plain shuffle even
+/// when a sticky dynamic shuffle would carry over; omitted leaves it to the sticky rule.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn play_playlist(
     state: St<'_>,
@@ -1666,10 +1679,19 @@ pub async fn play_playlist(
     source_name: Option<String>,
     shuffle: Option<bool>,
     continuation: Option<String>,
+    dynamic: Option<bool>,
 ) -> Result<(), String> {
     let state = state.inner().clone();
     state
-        .play_tracks(items, start, source_id, source_name, shuffle.unwrap_or(false), continuation)
+        .play_tracks(
+            items,
+            start,
+            source_id,
+            source_name,
+            shuffle.unwrap_or(false),
+            continuation,
+            dynamic,
+        )
         .await;
     Ok(())
 }
@@ -2627,6 +2649,14 @@ pub async fn lt_set_server_url(state: St<'_>, url: String) -> Result<(), String>
     Ok(())
 }
 
+/// Host: let people in without asking. Persisted, so it holds for every room this user hosts.
+#[tauri::command]
+pub async fn lt_set_auto_admit(state: St<'_>, on: bool) -> Result<(), String> {
+    state.db.set_setting("lt_auto_admit", if on { "1" } else { "0" });
+    state.lt.set_auto_admit(on).await;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn lt_create_room(state: St<'_>, username: String) -> Result<(), String> {
     state.lt.create_room(username).await;
@@ -3006,6 +3036,34 @@ pub async fn limusic_submit(
 #[tauri::command]
 pub async fn lyrics_parse(text: String) -> Result<Vec<crate::lyrics::LyricLine>, String> {
     crate::lyrics::parse_file(&text)
+}
+
+/// Word-synced lines as an Enhanced LRC file, wherever the user picks in a save dialog. `false`
+/// when the dialog was cancelled and nothing was written. The lyrics footer offers it on the
+/// user's own Limusic lyric only (`LyricsFileButton.svelte`).
+#[tauri::command]
+pub async fn save_synced_lyrics(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    title: String,
+    artists: String,
+    lines: Vec<crate::lyrics::LyricLine>,
+) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let text = crate::lyrics::to_elrc(&lines);
+    // On the window, as the plugin's own `save()` does: on Windows a dialog with no owner can
+    // open behind the app.
+    let dialog = app
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .add_filter("Enhanced LRC", &["lrc"])
+        .set_file_name(crate::lyrics::lrc_file_name(&title, &artists));
+    let Some(file) = dialog.blocking_save_file() else { return Ok(false) };
+    let path = file.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(path, text).map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 // --- Changelog ------------------------------------------------------------------------------

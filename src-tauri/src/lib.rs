@@ -1128,7 +1128,9 @@ pub fn run() {
             // Empty means the built-in default, which `LtSession` resolves when it connects. The
             // URL does not live here so that nothing ever has to hand it to the UI.
             let lt_url = db.get_setting("lt_server_url").unwrap_or_default();
-            let (lt, lt_sync_rx) = listentogether::LtSession::new(handle.clone(), lt_url);
+            let lt_auto_admit = db.get_setting("lt_auto_admit").as_deref() == Some("1");
+            let (lt, lt_sync_rx) =
+                listentogether::LtSession::new(handle.clone(), lt_url, lt_auto_admit);
             // Device link: opens a socket only once the user has linked a device.
             let (link, link_rx) = devicelink::LinkSession::new(handle.clone(), db.clone());
 
@@ -1433,6 +1435,7 @@ pub fn run() {
             commands::prev_track,
             commands::back_to_previous,
             commands::toggle_shuffle,
+            commands::set_shuffle,
             commands::set_repeat,
             commands::toggle_pause,
             commands::seek,
@@ -1557,6 +1560,7 @@ pub fn run() {
             commands::import_resolve,
             commands::lt_get_state,
             commands::lt_set_server_url,
+            commands::lt_set_auto_admit,
             commands::lt_create_room,
             commands::lt_join_room,
             commands::lt_leave,
@@ -1607,6 +1611,7 @@ pub fn run() {
             commands::limusic_notes_seen,
             commands::limusic_revert,
             commands::lyrics_parse,
+            commands::save_synced_lyrics,
             commands::lastfm_connect,
             commands::lastfm_disconnect,
             commands::lastfm_status,
@@ -1628,6 +1633,14 @@ pub fn run() {
             commands::log_ui,
         ]))
         .on_window_event(|window, event| {
+            // Windows/Linux do not tell the page about minimize/restore.
+            match event {
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Focused(_) => {
+                    tray::sync_main_visible(window);
+                }
+                _ => {}
+            }
+
             // Close-to-tray: ✕ hides the main window and playback keeps running; real quit is
             // the tray's Quit item (or the "close_to_tray=false" setting). Label-gated: the
             // hidden cipher/PoToken webviews are windows too and must close normally.
